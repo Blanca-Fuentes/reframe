@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import asyncio
 import contextlib
 import math
 import sys
@@ -19,7 +20,8 @@ from reframe.core.logging import getlogger, level_from_str
 from reframe.core.pipeline import (CompileOnlyRegressionTest,
                                    RunOnlyRegressionTest)
 from reframe.frontend.executors import (ExecutionPolicy, RegressionTask,
-                                        TaskEventListener, ABORT_REASONS)
+                                        TaskEventListener, ABORT_REASONS,
+                                        asyncio_run)
 
 
 def _get_partition_name(task, phase='run'):
@@ -97,8 +99,8 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
         self._retired_tasks = []
         self.task_listeners.append(self)
 
-    def runcase(self, case):
-        super().runcase(case)
+    def _runcase(self, case):
+        super()._runcase(case)
         check, partition, _ = case
         task = RegressionTask(case, self.task_listeners)
         if check.is_dry_run():
@@ -130,9 +132,172 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
                        task.testcase.environ,
                        sched_flex_alloc_nodes=self.sched_flex_alloc_nodes,
                        sched_options=self.sched_options)
-            task.compile()
-            task.compile_wait()
-            task.run()
+            asyncio.run(task.compile())
+            asyncio.run(task.compile_wait())
+            asyncio.run(task.run())
+
+            # Pick the right scheduler
+            if task.check.local:
+                sched = self.local_scheduler
+            else:
+                sched = partition.scheduler
+
+            self._pollctl.reset_snooze_time()
+            while True:
+                if not self.dry_run_mode:
+                    asyncio.run(sched.poll(task.check.job))
+
+                if task.run_complete():
+                    break
+
+                self._pollctl.snooze()
+
+            asyncio.run(task.run_wait())
+            if not self.skip_sanity_check:
+                task.sanity()
+
+            if not self.skip_performance_check:
+                task.performance()
+
+            self._retired_tasks.append(task)
+            task.finalize()
+        except TaskExit:
+            return
+        except ABORT_REASONS as e:
+            task.abort(e)
+            raise
+        except BaseException:
+            task.fail(sys.exc_info())
+
+    def on_task_setup(self, task):
+        pass
+
+    def on_task_run(self, task):
+        pass
+
+    def on_task_compile(self, task):
+        pass
+
+    def on_task_exit(self, task):
+        pass
+
+    def on_task_compile_exit(self, task):
+        pass
+
+    def on_task_skip(self, task):
+        msg = str(task.exc_info[1])
+        self.printer.status('SKIP', msg, just='right')
+
+    def on_task_abort(self, task):
+        msg = f'{task.info()}'
+        self.printer.status('ABORT', msg, just='right')
+
+    def on_task_failure(self, task):
+        self._num_failed_tasks += 1
+        msg = f'{task.info()}'
+        if task.failed_stage == 'cleanup':
+            self.printer.status('ERROR', msg, just='right')
+        else:
+            self.printer.status('FAIL', msg, just='right')
+
+        _print_perf(task)
+        if task.failed_stage == 'sanity':
+            # Dry-run the performance stage to trigger performance logging
+            task.performance(dry_run=True)
+
+        timings = task.pipeline_timings(['setup',
+                                         'compile_complete',
+                                         'run_complete',
+                                         'sanity',
+                                         'performance',
+                                         'total'])
+        getlogger().info(f'==> test failed during {task.failed_stage!r}: '
+                         f'test staged in {task.check.stagedir!r}')
+        getlogger().verbose(f'==> {timings}')
+        if self._num_failed_tasks >= self.max_failures:
+            raise FailureLimitError(
+                f'maximum number of failures ({self.max_failures}) reached'
+            )
+
+        if self.timeout_expired():
+            raise RunSessionTimeout('maximum session duration exceeded')
+
+    def on_task_success(self, task):
+        msg = f'{task.info()}'
+        self.printer.status('OK', msg, just='right')
+        _print_perf(task)
+        timings = task.pipeline_timings(['setup',
+                                         'compile_complete',
+                                         'run_complete',
+                                         'sanity',
+                                         'performance',
+                                         'total'])
+        getlogger().verbose(f'==> {timings}')
+
+        # Update reference count of dependencies
+        for c in task.testcase.deps:
+            # NOTE: Restored dependencies are not in the task_index
+            if c in self._task_index:
+                self._task_index[c].ref_count -= 1
+
+        _cleanup_all(self._retired_tasks, not self.keep_stage_files)
+        if self.timeout_expired():
+            raise RunSessionTimeout('maximum session duration exceeded')
+
+    def _exit(self):
+        # Clean up all remaining tasks
+        _cleanup_all(self._retired_tasks, not self.keep_stage_files)
+
+
+class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
+    def __init__(self):
+        super().__init__()
+
+        self._pollctl = _PollController()
+
+        # Index tasks by test cases
+        self._task_index = {}
+
+        # Tasks that have finished, but have not performed their cleanup phase
+        self._retired_tasks = []
+        self.task_listeners.append(self)
+
+    async def _runcase(self, case):
+        super()._runcase(case)
+        check, partition, _ = case
+        task = RegressionTask(case, self.task_listeners)
+        if check.is_dry_run():
+            self.printer.status('DRY', task.info())
+        else:
+            self.printer.status('RUN', task.info())
+
+        self._task_index[case] = task
+        self.stats.add_task(task)
+        try:
+            # Do not run test if any of its dependencies has failed
+            # NOTE: Restored dependencies are not in the task_index
+            if any(self._task_index[c].failed
+                   for c in case.deps if c in self._task_index):
+                raise TaskDependencyError('dependencies failed')
+
+            if any(self._task_index[c].skipped
+                   for c in case.deps if c in self._task_index):
+
+                # We raise the SkipTestError here and catch it immediately in
+                # order for `skip()` to get the correct exception context.
+                try:
+                    raise SkipTestError('skipped due to skipped dependencies')
+                except SkipTestError as e:
+                    task.skip()
+                    raise TaskExit from e
+
+            task.setup(task.testcase.partition,
+                       task.testcase.environ,
+                       sched_flex_alloc_nodes=self.sched_flex_alloc_nodes,
+                       sched_options=self.sched_options)
+            await task.compile()
+            await task.compile_wait()
+            await task.run()
 
             # Pick the right scheduler
             if task.check.local:
@@ -150,7 +315,7 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
 
                 self._pollctl.snooze()
 
-            task.run_wait()
+            await task.run_wait()
             if not self.skip_sanity_check:
                 task.sanity()
 
@@ -246,6 +411,16 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
         # Clean up all remaining tasks
         _cleanup_all(self._retired_tasks, not self.keep_stage_files)
 
+    def execute(self, testcases):
+
+        all_cases = asyncio.gather(
+            *(self._runcase(t)
+              for t in testcases)
+        )
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(all_cases)
+        loop.close()
+
 
 class AsynchronousExecutionPolicy(ExecutionPolicy, TaskEventListener):
     '''The asynchronous execution policy.'''
@@ -321,7 +496,7 @@ class AsynchronousExecutionPolicy(ExecutionPolicy, TaskEventListener):
         with open(filename, 'w') as fp:
             jsonext.dump(self._pipeline_progress, fp, indent=2)
 
-    def runcase(self, case):
+    def _runcase(self, case):
         super().runcase(case)
         check, partition, environ = case
         self._schedulers[partition.fullname] = partition.scheduler

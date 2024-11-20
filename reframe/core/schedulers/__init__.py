@@ -671,7 +671,8 @@ class Job(jsonext.JSONSerializable, metaclass=JobMeta):
         return len(available_nodes) * num_tasks_per_node
 
     async def submit(self):
-        return await self.scheduler.submit(self)
+        result = await self.scheduler.submit(self)
+        return result
 
     async def wait(self):
         if self.jobid is None:

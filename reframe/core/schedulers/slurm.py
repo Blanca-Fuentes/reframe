@@ -854,7 +854,7 @@ class _SlurmContext(sched.ReframeContext):
         '''Set the node types in the system
 
         '''
-
+        # print(raw_node_types)
         default_nodes = []  # Initialize the list of node types in the default
         # Initialize the list of node types (with filtered features)
         node_types = []
@@ -880,14 +880,14 @@ class _SlurmContext(sched.ReframeContext):
         else:
             self.default_nodes = default_nodes  # Get the filtered features
 
+        self.node_types = set([tuple(sorted(node))
+                              for node in node_types])  # Get the unique types
         getlogger().debug(
-            f'\nThe following {len(set(node_types))} '
+            f'\nThe following {len(self.node_types)} '
             'node types were detected:'
         )
-        for node_t in set(node_types):
+        for node_t in self.node_types:
             getlogger().debug(node_t)
-
-        self.node_types = set(node_types)  # Get the unique types
 
     @staticmethod
     def _filter_node_feats(exclude_feats: list, node_feats: list) -> list:

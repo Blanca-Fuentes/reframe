@@ -32,7 +32,7 @@ from reframe.frontend.testgenerators import (distribute_tests,
                                              getallnodes, repeat_tests,
                                              parameterize_tests)
 from reframe.frontend.executors.policies import (SerialExecutionPolicy,
-                                                 AsynchronousExecutionPolicy)
+                                                 AsyncioExecutionPolicy)
 from reframe.frontend.executors import Runner, generate_testcases
 from reframe.frontend.loader import RegressionCheckLoader
 from reframe.frontend.printer import PrettyPrinter
@@ -1574,7 +1574,7 @@ def main():
         if options.exec_policy == 'serial':
             exec_policy = SerialExecutionPolicy()
         elif options.exec_policy == 'async':
-            exec_policy = AsynchronousExecutionPolicy()
+            exec_policy = AsyncioExecutionPolicy()
         else:
             # This should not happen, since choices are handled by
             # argparser
