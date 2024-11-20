@@ -7,6 +7,7 @@
 # OS and shell utility functions
 #
 
+import asyncio
 import collections.abc
 import errno
 import getpass
@@ -27,6 +28,8 @@ import reframe.utility as util
 from reframe.core.exceptions import (ReframeError, SpawnedProcessError,
                                      SpawnedProcessTimeout)
 from . import OrderedSet
+
+WD_save = os.getcwd()
 
 
 class UnstartedProcError(ReframeError):
@@ -336,6 +339,56 @@ def run_command_async(cmd,
                             universal_newlines=True,
                             shell=shell,
                             **popen_args)
+
+
+async def run_command_asyncio(cmd,
+                              check=False,
+                              timeout=None,
+                              shell=True,
+                              log=True,
+                              **kwargs):
+    '''TODO: please write proper docstring
+    '''
+    if log:
+        from reframe.core.logging import getlogger
+        getlogger().debug(f'[CMD] {cmd!r}')
+
+    if isinstance(cmd, str) and not shell:
+        cmd = shlex.split(cmd)
+
+    try:
+        if shell:
+            # Call create_subprocess_shell
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        else:
+            # Call create_subprocess_exec
+            proc = await asyncio.create_subprocess_exec(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        proc_stdout, proc_stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+    except asyncio.TimeoutError as e:
+        os.killpg(proc.pid, signal.SIGKILL)
+        raise SpawnedProcessTimeout(e.cmd,
+                                    proc.stdout.read(),
+                                    proc.stderr.read(), timeout) from None
+
+    completed = subprocess.CompletedProcess(cmd,
+                                            returncode=proc.returncode,
+                                            stdout=proc_stdout.decode(),
+                                            stderr=proc_stderr.decode())
+
+    if check and proc.returncode != 0:
+        raise SpawnedProcessError(completed.args,
+                                  completed.stdout, completed.stderr,
+                                  completed.returncode)
+
+    return completed
 
 
 def run_command_async2(*args, check=False, **kwargs):
@@ -648,6 +701,12 @@ class change_dir:
         os.chdir(self._dir_name)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self._wd_save)
+
+    async def __aenter__(self):
+        os.chdir(self._dir_name)
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         os.chdir(self._wd_save)
 
 

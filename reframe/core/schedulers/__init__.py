@@ -8,6 +8,7 @@
 #
 
 import abc
+import asyncio
 import copy
 import os
 import tempfile
@@ -669,14 +670,14 @@ class Job(jsonext.JSONSerializable, metaclass=JobMeta):
         available_nodes = self.scheduler.filternodes(self, available_nodes)
         return len(available_nodes) * num_tasks_per_node
 
-    def submit(self):
-        return self.scheduler.submit(self)
+    async def submit(self):
+        return await self.scheduler.submit(self)
 
-    def wait(self):
+    async def wait(self):
         if self.jobid is None:
             raise JobNotStartedError('cannot wait an unstarted job')
 
-        self.scheduler.wait(self)
+        await self.scheduler.wait(self)
         self._completion_time = self._completion_time or time.time()
 
     def cancel(self):
@@ -777,7 +778,7 @@ class ReframeContext(abc.ABC):
         self._keep_tmp_dir = False
         self.TMP_DIR = tempfile.mkdtemp(
             prefix='reframe_config_detection_',
-            dir=prefix
+            dir=os.path.abspath(prefix)
         )
         if detect_containers:
             getlogger().info(f'Stage directory: {self.TMP_DIR}')
@@ -963,8 +964,8 @@ class ReframeContext(abc.ABC):
              'max_jobs':   max_jobs,
              'launcher':   'local'})
 
-    def create_remote_partition(self, node_feats: tuple,
-                                sched_options):
+    async def create_remote_partition(self, node_feats: tuple,
+                                      sched_options):
 
         node_features = list(node_feats)
         _detect_containers = copy.deepcopy(self._detect_containers)
@@ -990,12 +991,12 @@ class ReframeContext(abc.ABC):
             )
             remote_job.detect_containers = _detect_containers
             self._generate_job_content(remote_job)
-            submission_error, access_node = self.submit_detect_job(
+            submission_error, access_node = await self.submit_detect_job(
                 remote_job, node_features
             )
             if not submission_error:
                 try:
-                    remote_job.wait()
+                    await remote_job.wait()
                 except JobError as e:
                     submission_error = e
                     getlogger().warning(f'{name}: {e}')
@@ -1047,10 +1048,14 @@ class ReframeContext(abc.ABC):
              'container_platforms': container_platforms}
         )
 
-    def create_partitions(self, sched_options):
-        # TODO: asynchronous
-        for node in self.node_types:
-            self.create_remote_partition(node, sched_options)
+    async def create_partitions(self, sched_options):
+        # SYNCHRONOUS:
+        # for node in self.node_types:
+        #     self.create_remote_partition(node, sched_options)
+        await asyncio.gather(
+            *(self.create_remote_partition(node, sched_options)
+              for node in self.node_types)
+        )
         if not self._keep_tmp_dir:
             shutil.rmtree(self.TMP_DIR)
         else:
