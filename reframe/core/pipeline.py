@@ -44,6 +44,8 @@ from reframe.core.exceptions import (BuildError, DependencyError,
 from reframe.core.meta import RegressionTestMeta
 from reframe.core.schedulers import Job
 
+WD_ORIGINAL = os.getcwd()
+
 
 class _NoRuntime(ContainerPlatform):
     '''Proxy container runtime for storing container platform info early
@@ -1018,7 +1020,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
             prefix = cls._rfm_custom_prefix
         except AttributeError:
             if osext.is_interactive():
-                prefix = os.getcwd()
+                prefix = WD_ORIGINAL
             else:
                 try:
                     prefix = cls._rfm_pinned_prefix
@@ -1762,6 +1764,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
               more details.
 
         '''
+        os.chdir(WD_ORIGINAL)
         self._current_partition = partition
         self._current_environ = environ
         self._setup_paths()
@@ -2582,6 +2585,7 @@ class RunOnlyRegressionTest(RegressionTest, special=True):
         Similar to the :func:`RegressionTest.setup`, except that no build job
         is created for this test.
         '''
+        os.chdir(WD_ORIGINAL)
         self._current_partition = partition
         self._current_environ = environ
         self._setup_paths()
@@ -2648,6 +2652,7 @@ class CompileOnlyRegressionTest(RegressionTest, special=True):
         Similar to the :func:`RegressionTest.setup`, except that no run job
         is created for this test.
         '''
+        os.chdir(WD_ORIGINAL)
         # No need to setup the job for compile-only checks
         self._current_partition = partition
         self._current_environ = environ

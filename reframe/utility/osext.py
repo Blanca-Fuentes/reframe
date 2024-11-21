@@ -341,6 +341,35 @@ def run_command_async(cmd,
                             **popen_args)
 
 
+async def run_command_asyncio_alone(cmd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    shell=True,
+                                    log=True,
+                                    **kwargs):
+    '''TODO: please write proper docstring
+    '''
+    if log:
+        from reframe.core.logging import getlogger
+        getlogger().debug(f'[CMD] {cmd!r}')
+
+    if isinstance(cmd, str) and not shell:
+        cmd = shlex.split(cmd)
+
+    if shell:
+        # Call create_subprocess_shell
+        return await asyncio.create_subprocess_shell(
+            cmd, stdout=stdout,
+            stderr=stderr
+        )
+    else:
+        # Call create_subprocess_exec
+        return asyncio.create_subprocess_exec(
+            cmd, stdout=stdout,
+            stderr=stderr
+        )
+
+
 async def run_command_asyncio(cmd,
                               check=False,
                               timeout=None,
@@ -694,7 +723,7 @@ class change_dir:
     '''
 
     def __init__(self, dir_name):
-        self._wd_save = os.getcwd()
+        self._wd_save = WD_save
         self._dir_name = dir_name
 
     def __enter__(self):

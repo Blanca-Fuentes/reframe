@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import errno
+import asyncio
 import os
 import signal
 import socket
@@ -53,7 +53,7 @@ class LocalJobScheduler(sched.JobScheduler):
     def make_job(self, *args, **kwargs):
         return _LocalJob(*args, **kwargs)
 
-    def submit(self, job):
+    async def submit(self, job):
         # Run from the absolute path
         f_stdout = open(job.stdout, 'w+')
         f_stderr = open(job.stderr, 'w+')
@@ -61,7 +61,7 @@ class LocalJobScheduler(sched.JobScheduler):
         # The new process starts also a new session (session leader), so that
         # we can later kill any other processes that this might spawn by just
         # killing this one.
-        proc = osext.run_command_async(
+        proc = await osext.run_command_asyncio_alone(
             os.path.abspath(job.script_filename),
             stdout=f_stdout,
             stderr=f_stderr,
@@ -139,7 +139,7 @@ class LocalJobScheduler(sched.JobScheduler):
         self._term_all(job)
         job._cancel_time = time.time()
 
-    def wait(self, job):
+    async def wait(self, job):
         '''Wait for the spawned job to finish.
 
         As soon as the parent job process finishes, all of its spawned
@@ -150,8 +150,8 @@ class LocalJobScheduler(sched.JobScheduler):
         '''
 
         while not self.finished(job):
-            self.poll(job)
-            time.sleep(self.WAIT_POLL_SECS)
+            await self.poll(job)
+            await asyncio.sleep(self.WAIT_POLL_SECS)
 
     def finished(self, job):
         '''Check if the spawned process has finished.
@@ -165,36 +165,15 @@ class LocalJobScheduler(sched.JobScheduler):
 
         return job.state in ['SUCCESS', 'FAILURE', 'TIMEOUT']
 
-    def poll(self, *jobs):
+    async def poll(self, *jobs):
         for job in jobs:
-            self._poll_job(job)
+            await self._poll_job(job)
 
-    def _poll_job(self, job):
+    async def _poll_job(self, job):
         if job is None or job.jobid is None:
             return
 
-        try:
-            pid, status = os.waitpid(job.jobid, os.WNOHANG)
-        except OSError as e:
-            if e.errno == errno.ECHILD:
-                # No unwaited children
-                self.log('no more unwaited children')
-                return
-            else:
-                raise e
-
-        if job.cancel_time:
-            # Job has been cancelled; give it a grace period and kill it
-            self.log(f'Job {job.jobid} has been cancelled; '
-                     f'giving it a grace period')
-            t_rem = self.CANCEL_GRACE_PERIOD - (time.time() - job.cancel_time)
-            if t_rem > 0:
-                time.sleep(t_rem)
-
-            self._kill_all(job)
-            return
-
-        if not pid:
+        if job.proc.returncode is None:
             # Job has not finished; check if we have reached a timeout
             t_elapsed = time.time() - job.submit_time
             if job.time_limit and t_elapsed > job.time_limit:
@@ -204,19 +183,29 @@ class LocalJobScheduler(sched.JobScheduler):
                     f'job timed out ({t_elapsed:.6f}s > {job.time_limit}s)',
                     job.jobid
                 )
+            return
 
+        if job.cancel_time:
+            # Job has been cancelled; give it a grace period and kill it
+            self.log(f'Job {job.jobid} has been cancelled; '
+                     f'giving it a grace period')
+            t_rem = self.CANCEL_GRACE_PERIOD - (time.time() - job.cancel_time)
+            if t_rem > 0:
+                await asyncio.sleep(t_rem)
+
+            self._kill_all(job)
             return
 
         # Job has finished; kill the whole session
         self._kill_all(job)
 
         # Retrieve the status of the job and return
-        if os.WIFEXITED(status):
-            job._exitcode = os.WEXITSTATUS(status)
+        if os.WIFEXITED(job.proc.returncode):
+            job._exitcode = os.WEXITSTATUS(job.proc.returncode)
             job._state = 'FAILURE' if job.exitcode != 0 else 'SUCCESS'
-        elif os.WIFSIGNALED(status):
+        elif os.WIFSIGNALED(job.proc.returncode):
             job._state = 'FAILURE'
-            job._signal = os.WTERMSIG(status)
+            job._signal = os.WTERMSIG(job.proc.returncode)
 
     @classmethod
     def validate(cls) -> str:

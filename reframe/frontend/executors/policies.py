@@ -20,8 +20,7 @@ from reframe.core.logging import getlogger, level_from_str
 from reframe.core.pipeline import (CompileOnlyRegressionTest,
                                    RunOnlyRegressionTest)
 from reframe.frontend.executors import (ExecutionPolicy, RegressionTask,
-                                        TaskEventListener, ABORT_REASONS,
-                                        asyncio_run)
+                                        TaskEventListener, ABORT_REASONS)
 
 
 def _get_partition_name(task, phase='run'):
@@ -69,7 +68,7 @@ class _PollController:
     def reset_snooze_time(self):
         self._sleep_duration = self.SLEEP_MIN
 
-    def snooze(self):
+    async def snooze(self):
         if self._num_polls == 0:
             self._t_init = time.time()
 
@@ -80,7 +79,7 @@ class _PollController:
             f'Poll rate control: sleeping for {self._sleep_duration}s '
             f'(current poll rate: {poll_rate} polls/s)'
         )
-        time.sleep(self._sleep_duration)
+        await asyncio.sleep(self._sleep_duration)
         self._sleep_duration = min(
             self._sleep_duration*self.SLEEP_INC_RATE, self.SLEEP_MAX
         )
@@ -308,12 +307,12 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
             self._pollctl.reset_snooze_time()
             while True:
                 if not self.dry_run_mode:
-                    sched.poll(task.check.job)
+                    await sched.poll(task.check.job)
 
                 if task.run_complete():
                     break
 
-                self._pollctl.snooze()
+                await self._pollctl.snooze()
 
             await task.run_wait()
             if not self.skip_sanity_check:
@@ -420,6 +419,8 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(all_cases)
         loop.close()
+
+        self.exit()
 
 
 class AsynchronousExecutionPolicy(ExecutionPolicy, TaskEventListener):
@@ -626,7 +627,7 @@ class AsynchronousExecutionPolicy(ExecutionPolicy, TaskEventListener):
         if self.deps_skipped(task):
             try:
                 raise SkipTestError('skipped due to skipped dependencies')
-            except SkipTestError as e:
+            except SkipTestError:
                 task.skip()
                 self._current_tasks.remove(task)
                 return 1
