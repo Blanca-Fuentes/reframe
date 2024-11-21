@@ -807,9 +807,9 @@ class ExecutionPolicy(abc.ABC):
         '''Execute the policy for a given set of testcases.'''
         # Moved here the execution
         for t in testcases:
-            self._policy._runcase(t)
+            self._runcase(t)
 
-        self._policy._exit()
+        self.exit()
 
 
 def asyncio_run(coro):
