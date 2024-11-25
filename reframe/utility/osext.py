@@ -345,7 +345,9 @@ async def run_command_asyncio_alone(cmd,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE,
                                     shell=True,
+                                    timeout=None,
                                     log=True,
+                                    serial=False,
                                     **kwargs):
     '''TODO: please write proper docstring
     '''
@@ -358,16 +360,38 @@ async def run_command_asyncio_alone(cmd,
 
     if shell:
         # Call create_subprocess_shell
-        return await asyncio.create_subprocess_shell(
+        proc = await asyncio.create_subprocess_shell(
             cmd, stdout=stdout,
             stderr=stderr
         )
     else:
         # Call create_subprocess_exec
-        return asyncio.create_subprocess_exec(
+        await asyncio.create_subprocess_exec(
             cmd, stdout=stdout,
             stderr=stderr
         )
+
+    await proc.wait()
+    return proc
+
+    # if serial:
+    #     try:
+    #         proc_stdout, proc_stderr = await asyncio.wait_for(
+    #             proc.communicate(), timeout=timeout
+    #         )
+    #     except asyncio.TimeoutError as e:
+    #         os.killpg(proc.pid, signal.SIGKILL)
+    #         raise SpawnedProcessTimeout(e.cmd,
+    #                                     proc.stdout.read(),
+    #                                     proc.stderr.read(), timeout) from None
+
+    #     completed = subprocess.CompletedProcess(cmd,
+    #                                             returncode=proc.returncode,
+    #                                             stdout=proc_stdout.decode(),
+    #                                             stderr=proc_stderr.decode())
+    #     return completed
+    # else:
+    #     return proc
 
 
 async def run_command_asyncio(cmd,

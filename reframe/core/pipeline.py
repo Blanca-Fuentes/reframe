@@ -12,7 +12,6 @@ __all__ = [
     'RegressionMixin'
 ]
 
-import asyncio
 import glob
 import hashlib
 import inspect
@@ -2599,7 +2598,7 @@ class RunOnlyRegressionTest(RegressionTest, special=True):
         This is a no-op for this type of test.
         '''
 
-    def compile_wait(self):
+    async def compile_wait(self):
         '''Wait for compilation phase to finish.
 
         This is a no-op for this type of test.
@@ -2671,13 +2670,13 @@ class CompileOnlyRegressionTest(RegressionTest, special=True):
     def stderr(self):
         return self.build_job.stderr if self.build_job else None
 
-    def run(self):
+    async def run(self):
         '''The run stage of the regression test pipeline.
 
         Implemented as no-op.
         '''
 
-    def run_wait(self):
+    async def run_wait(self):
         '''Wait for this test to finish.
 
         Implemented as no-op

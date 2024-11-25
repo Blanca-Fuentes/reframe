@@ -460,14 +460,12 @@ class RegressionTask:
 
     @logging.time_function
     async def compile(self):
-        await self.check.compile()
-        # await self._safe_call_asyncio(self.check.compile)
+        await self._safe_call_asyncio(self.check.compile)
         self._notify_listeners('on_task_compile')
 
     @logging.time_function
     async def compile_wait(self):
-        await self.check.compile_wait()
-        # await self._safe_call_asyncio(self.check.compile_wait)
+        await self._safe_call_asyncio(self.check.compile_wait)
 
     @logging.time_function
     async def run(self):
@@ -751,7 +749,7 @@ class Runner:
         #     self._policy.runcase(t)
 
         # self._policy.exit()
-        self.policy.execute(testcases)
+        self._policy.execute(testcases)
         self._printer.separator('short single line',
                                 'all spawned checks have finished\n')
 

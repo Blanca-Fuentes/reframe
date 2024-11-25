@@ -145,11 +145,10 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
             while True:
                 if not self.dry_run_mode:
                     asyncio.run(sched.poll(task.check.job))
-
                 if task.run_complete():
                     break
 
-                self._pollctl.snooze()
+                asyncio.run(self._pollctl.snooze())
 
             asyncio.run(task.run_wait())
             if not self.skip_sanity_check:
@@ -253,6 +252,7 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
         super().__init__()
 
         self._pollctl = _PollController()
+        self._current_tasks = util.OrderedSet()
 
         # Index tasks by test cases
         self._task_index = {}
@@ -261,17 +261,25 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
         self._retired_tasks = []
         self.task_listeners.append(self)
 
-    async def _runcase(self, case):
+    async def _runcase(self, case, task):
+        # I added the task here as an argument because, I wanted to initialize it
+        # outside, when I gather the tasks. If I gather the tasks and then I do asyncio
+        # manage them, if one of them fails the others are not iformed, I had to code that
+        # manually. There is a way to make everything stop if an exepction is raised but
+        # I didn't know how to treat that raise Exception nicelly because I wouldn't be able
+        # to abort the tasks which the execution has not yet started, I needed to do abortall
+        # on all the tests, not only the ones which were initiated by the execution. Exit gracefully
+        # the execuion loop aborting all the tasks
         super()._runcase(case)
+        deps_worked = True
         check, partition, _ = case
-        task = RegressionTask(case, self.task_listeners)
+        # task = RegressionTask(case, self.task_listeners)
         if check.is_dry_run():
             self.printer.status('DRY', task.info())
         else:
             self.printer.status('RUN', task.info())
 
         self._task_index[case] = task
-        self.stats.add_task(task)
         try:
             # Do not run test if any of its dependencies has failed
             # NOTE: Restored dependencies are not in the task_index
@@ -323,13 +331,54 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
 
             self._retired_tasks.append(task)
             task.finalize()
+            # The execution is not as controlled as in the pseudo asynchronous
+            # we need to block those tasks until all the dependencies finish
         except TaskExit:
-            return
+            if case.deps:
+                deps_worked = await self.check_deps(case)
+            if not deps_worked:
+                task.skip()
+                return
+            else:
+                return
         except ABORT_REASONS as e:
-            task.abort(e)
-            raise
+            if case.deps:
+                deps_worked = await self.check_deps(case)
+            if not deps_worked:
+                task.skip()
+                return
+            else:
+                self._abortall(e)
+                raise
         except BaseException:
-            task.fail(sys.exc_info())
+            if case.deps:
+                deps_worked = await self.check_deps(case)
+            if not deps_worked:
+                task.skip()
+                return
+            else:
+                task.fail(sys.exc_info())
+
+        if case.deps:
+            deps_worked = await self.check_deps(case)
+        if not deps_worked:
+            task.skip()
+
+    async def check_deps(self, case):
+        while any(not (self._task_index[c].completed or self._task_index[c].skipped)
+                  for c in case.deps if c in self._task_index):
+            await asyncio.sleep(1)
+
+        return not any((self._task_index[c].failed or self._task_index[c].skipped)
+                       for c in case.deps if c in self._task_index)
+
+    def _abortall(self, cause):
+        '''Mark all tests as failures'''
+
+        getlogger().debug2(f'Aborting all tasks due to {type(cause).__name__}')
+        for task in self._current_tasks:
+            with contextlib.suppress(FailureLimitError):
+                task.abort(cause)
 
     def on_task_setup(self, task):
         pass
@@ -411,16 +460,38 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
         _cleanup_all(self._retired_tasks, not self.keep_stage_files)
 
     def execute(self, testcases):
-
-        all_cases = asyncio.gather(
-            *(self._runcase(t)
-              for t in testcases)
-        )
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(all_cases)
-        loop.close()
-
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        all_cases = []
+        for t in testcases:
+            task = RegressionTask(t, self.task_listeners)
+            self.stats.add_task(task)
+            self._current_tasks.add(task)
+            all_cases.append(asyncio.ensure_future(self._runcase(t, task)))
+        # all_cases = [asyncio.create_task(self._runcase(t) for t in self._current_tasks]
+        try:
+            # Wait for tasks until the first failure
+            loop.run_until_complete(self._execute_until_failure(all_cases))
+        except Exception as e:
+            print(f"Execution stopped due to an error: {e}")
+        finally:
+            # Cancel remaining tasks
+            for case in all_cases:
+                if not case.done():
+                    case.cancel()
         self.exit()
+
+    async def _execute_until_failure(self, all_cases):
+        """Wait for tasks to complete or fail, stopping at the first failure."""
+        while all_cases:
+            done, all_cases = await asyncio.wait(
+                all_cases, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                if task.exception():
+                    raise task.exception()  # Exit if aborted
 
 
 class AsynchronousExecutionPolicy(ExecutionPolicy, TaskEventListener):

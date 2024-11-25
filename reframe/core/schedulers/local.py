@@ -162,7 +162,7 @@ class LocalJobScheduler(sched.JobScheduler):
         '''
         if job.exception:
             raise job.exception
-
+        # print(job.state)
         return job.state in ['SUCCESS', 'FAILURE', 'TIMEOUT']
 
     async def poll(self, *jobs):
@@ -172,7 +172,7 @@ class LocalJobScheduler(sched.JobScheduler):
     async def _poll_job(self, job):
         if job is None or job.jobid is None:
             return
-
+        # print(job.jobid, job.proc.returncode)
         if job.proc.returncode is None:
             # Job has not finished; check if we have reached a timeout
             t_elapsed = time.time() - job.submit_time
