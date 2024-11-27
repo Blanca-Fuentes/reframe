@@ -527,6 +527,8 @@ class RegressionTask:
         self._safe_call(self.check.cleanup, *args, **kwargs)
 
     def fail(self, exc_info=None, callback='on_task_failure'):
+        if self._aborted:
+            return
         self._failed_stage = self._current_stage
         self._exc_info = exc_info or sys.exc_info()
         self._notify_listeners(callback)
@@ -546,7 +548,6 @@ class RegressionTask:
         logging.getlogger().debug2(f'Aborting test case: {self.testcase!r}')
         exc = AbortTaskError()
         exc.__cause__ = cause
-        self._aborted = True
         try:
             if not self.zombie and self.check.job:
                 self.check.job.cancel()
@@ -556,6 +557,7 @@ class RegressionTask:
             self.fail()
         else:
             self.fail((type(exc), exc, None), 'on_task_abort')
+        self._aborted = True
 
     def info(self):
         '''Return an info string about this task.'''
@@ -744,11 +746,6 @@ class Runner:
         self._policy.enter()
         self._printer.reset_progress(len(testcases))
 
-        #  We need to move this into policy
-        # for t in testcases:
-        #     self._policy.runcase(t)
-
-        # self._policy.exit()
         self._policy.execute(testcases)
         self._printer.separator('short single line',
                                 'all spawned checks have finished\n')

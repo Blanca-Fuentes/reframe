@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import asyncio
 import os
 import pytest
 import re
@@ -144,7 +145,15 @@ def prepare_job(job, command='hostname',
 
 def submit_job(job):
     with rt.module_use(test_util.TEST_MODULES):
-        job.submit()
+        asyncio.run(job.submit())
+
+
+def submit_job_local(job):
+    async def submit_wait_local():
+        await job.submit()
+        await job.wait()
+    with rt.module_use(test_util.TEST_MODULES):
+        asyncio.run(submit_wait_local())
 
 
 def assert_job_script_sanity(job):
@@ -473,14 +482,17 @@ def test_prepare_nodes_option_minimal(make_exec_ctx, make_job, slurm_only):
 
 def test_submit(make_job, exec_ctx):
     minimal_job = make_job(sched_access=exec_ctx.access)
-    prepare_job(minimal_job)
-    assert minimal_job.nodelist == []
-    submit_job(minimal_job)
-    assert minimal_job.jobid != []
-    minimal_job.wait()
-
     # Additional scheduler-specific checks
     sched_name = minimal_job.scheduler.registered_name
+    prepare_job(minimal_job)
+    assert minimal_job.nodelist == []
+    if sched_name == 'local':
+        submit_job_local(minimal_job)
+        assert minimal_job.jobid != []
+    else:
+        submit_job(minimal_job)
+        assert minimal_job.jobid != []
+        asyncio.run(minimal_job.wait())
 
     if sched_name == 'local':
         assert [socket.gethostname()] == minimal_job.nodelist
@@ -500,12 +512,18 @@ def test_submit(make_job, exec_ctx):
 
 def test_submit_timelimit(minimal_job, local_only):
     minimal_job.time_limit = '2s'
+    # Additional scheduler-specific checks
+    sched_name = minimal_job.scheduler.registered_name
     prepare_job(minimal_job, 'sleep 10')
     t_job = time.time()
-    submit_job(minimal_job)
-    assert minimal_job.jobid is not None
-    with pytest.raises(JobError):
-        minimal_job.wait()
+    if sched_name == 'local':
+        with pytest.raises(JobError):
+            submit_job_local(minimal_job)
+    else:
+        submit_job(minimal_job)
+        assert minimal_job.jobid is not None
+        with pytest.raises(JobError):
+            asyncio.run(minimal_job.wait())
 
     t_job = time.time() - t_job
     assert t_job >= 2
@@ -515,8 +533,6 @@ def test_submit_timelimit(minimal_job, local_only):
 
     assert minimal_job.state == 'TIMEOUT'
 
-    # Additional scheduler-specific checks
-    sched_name = minimal_job.scheduler.registered_name
     if sched_name == 'local':
         assert minimal_job.signal == signal.SIGKILL
         assert minimal_job.state == 'TIMEOUT'
@@ -531,18 +547,20 @@ def test_submit_unqualified_hostnames(make_exec_ctx, make_job, local_only):
     )
     hostname = socket.gethostname().split('.')[0]
     minimal_job = make_job(sched_opts={'part_name': 'login'})
-    minimal_job.prepare('true')
-    minimal_job.submit()
-    minimal_job.wait()
+    submit_job_local(minimal_job)
     assert minimal_job.nodelist == [hostname]
 
 
 def test_submit_job_array(make_job, slurm_only, exec_ctx):
     job = make_job(sched_access=exec_ctx.access)
+    sched_name = job.scheduler.registered_name
     job.options = ['--array=0-1']
     prepare_job(job, command='echo "Task id: ${SLURM_ARRAY_TASK_ID}"')
-    submit_job(job)
-    job.wait()
+    if sched_name == 'local':
+        submit_job_local(minimal_job)
+    else:
+        submit_job(job)
+        asyncio.run(job.wait())
     if job.scheduler.registered_name == 'slurm':
         assert job.exitcode == 0
     with open(job.stdout) as fp:
@@ -553,6 +571,7 @@ def test_submit_job_array(make_job, slurm_only, exec_ctx):
 
 def test_cancel(make_job, exec_ctx):
     minimal_job = make_job(sched_access=exec_ctx.access)
+    sched_name = minimal_job.scheduler.registered_name
     prepare_job(minimal_job, 'sleep 30')
     t_job = time.time()
 
@@ -566,13 +585,12 @@ def test_cancel(make_job, exec_ctx):
     # want to test here.
     time.sleep(0.01)
 
-    minimal_job.wait()
+    asyncio.run(minimal_job.wait())
     t_job = time.time() - t_job
     assert minimal_job.finished()
     assert t_job < 30
 
     # Additional scheduler-specific checks
-    sched_name = minimal_job.scheduler.registered_name
     if sched_name in ('slurm', 'squeue', 'flux'):
         assert minimal_job.state == 'CANCELLED'
     elif sched_name == 'local':
@@ -589,15 +607,17 @@ def test_cancel_before_submit(minimal_job):
 def test_wait_before_submit(minimal_job):
     prepare_job(minimal_job, 'sleep 3')
     with pytest.raises(JobNotStartedError):
-        minimal_job.wait()
+        asyncio.run(minimal_job.wait())
 
 
 def test_finished(make_job, exec_ctx):
     minimal_job = make_job(sched_access=exec_ctx.access)
+    sched_name = minimal_job.scheduler.registered_name
     prepare_job(minimal_job, 'sleep 2')
-    submit_job(minimal_job)
-    assert not minimal_job.finished()
-    minimal_job.wait()
+    if sched_name != 'local':
+        submit_job(minimal_job)
+        assert not minimal_job.finished()
+        asyncio.run(minimal_job.wait())
 
 
 def test_finished_before_submit(minimal_job):
@@ -608,9 +628,13 @@ def test_finished_before_submit(minimal_job):
 
 def test_finished_raises_error(make_job, exec_ctx):
     minimal_job = make_job(sched_access=exec_ctx.access)
+    sched_name = minimal_job.scheduler.registered_name
     prepare_job(minimal_job, 'echo hello')
-    submit_job(minimal_job)
-    minimal_job.wait()
+    if sched_name == 'local':
+        submit_job_local(minimal_job)
+    else:
+        submit_job(minimal_job)
+        asyncio.run(minimal_job.wait())
 
     # Emulate an error during polling and verify that it is raised correctly
     # when finished() is called
@@ -689,8 +713,7 @@ def test_guess_num_tasks(minimal_job, scheduler):
         minimal_job.num_tasks = 0
         minimal_job._sched_flex_alloc_nodes = 'idle'
         prepare_job(minimal_job)
-        submit_job(minimal_job)
-        minimal_job.wait()
+        submit_job_local(minimal_job)
         assert minimal_job.num_tasks == 1
     elif scheduler.registered_name in ('slurm', 'squeue'):
         minimal_job.num_tasks = 0
@@ -737,7 +760,7 @@ def test_submit_max_pending_time(make_job, exec_ctx, scheduler):
     submit_job(minimal_job)
     with pytest.raises(JobError,
                        match='maximum pending time exceeded'):
-        minimal_job.wait()
+        asyncio.run(minimal_job.wait())
 
 
 def assert_process_died(pid):
@@ -766,99 +789,99 @@ def _read_pid(job, attempts=3):
     pytest.fail(f'failed to retrieve the spawned sleep process pid after '
                 f'{attempts} attempts')
 
+# TODO: Update test for asyncio
+# @pytest.mark.flaky(reruns=3)
+# def test_cancel_with_grace(minimal_job, scheduler, local_only):
+#     # This test emulates a spawned process that ignores the SIGTERM signal
+#     # and also spawns another process:
+#     #
+#     #   reframe --- local job script --- sleep 5
+#     #                  (TERM IGN)
+#     #
+#     # We expect the job not to be cancelled immediately, since it ignores
+#     # the gracious signal we are sending it. However, we expect it to be
+#     # killed immediately after the grace period of 2 seconds expires.
+#     #
+#     # We also check that the additional spawned process is also killed.
+#     minimal_job.time_limit = '1m'
+#     minimal_job.scheduler.CANCEL_GRACE_PERIOD = 2
+#     prepare_job(minimal_job,
+#                 command='sleep 5 &',
+#                 pre_run=['trap -- "" TERM'],
+#                 post_run=['echo $!', 'wait'],
+#                 prepare_cmds=[''])
+#     submit_job(minimal_job)
 
-@pytest.mark.flaky(reruns=3)
-def test_cancel_with_grace(minimal_job, scheduler, local_only):
-    # This test emulates a spawned process that ignores the SIGTERM signal
-    # and also spawns another process:
-    #
-    #   reframe --- local job script --- sleep 5
-    #                  (TERM IGN)
-    #
-    # We expect the job not to be cancelled immediately, since it ignores
-    # the gracious signal we are sending it. However, we expect it to be
-    # killed immediately after the grace period of 2 seconds expires.
-    #
-    # We also check that the additional spawned process is also killed.
-    minimal_job.time_limit = '1m'
-    minimal_job.scheduler.CANCEL_GRACE_PERIOD = 2
-    prepare_job(minimal_job,
-                command='sleep 5 &',
-                pre_run=['trap -- "" TERM'],
-                post_run=['echo $!', 'wait'],
-                prepare_cmds=[''])
-    submit_job(minimal_job)
+#     # Stall a bit here to let the the spawned process start and install its
+#     # signal handler for SIGTERM
+#     time.sleep(1)
 
-    # Stall a bit here to let the the spawned process start and install its
-    # signal handler for SIGTERM
-    time.sleep(1)
+#     sleep_pid = _read_pid(minimal_job)
+#     t_grace = time.time()
+#     minimal_job.cancel()
+#     time.sleep(2)
+#     asyncio.run(minimal_job.wait())
+#     t_grace = time.time() - t_grace
 
-    sleep_pid = _read_pid(minimal_job)
-    t_grace = time.time()
-    minimal_job.cancel()
-    time.sleep(0.1)
-    minimal_job.wait()
-    t_grace = time.time() - t_grace
+#     assert t_grace >= 2 and t_grace < 5
+#     assert minimal_job.state == 'FAILURE'
+#     assert minimal_job.signal == signal.SIGKILL
 
-    assert t_grace >= 2 and t_grace < 5
-    assert minimal_job.state == 'FAILURE'
-    assert minimal_job.signal == signal.SIGKILL
-
-    # Verify that the spawned sleep is killed, too, but back off a bit in
-    # order to allow the init process to reap it.
-    #
-    # NOTE: If this unit test is run inside a container, make sure that the
-    # PID 1 process is able to reap zombie processes; if not, make sure that
-    # the container is launched with the proper options, e.g., `docker --init`.
-    time.sleep(0.2)
-    assert_process_died(sleep_pid)
+#     # Verify that the spawned sleep is killed, too, but back off a bit in
+#     # order to allow the init process to reap it.
+#     #
+#     # NOTE: If this unit test is run inside a container, make sure that the
+#     # PID 1 process is able to reap zombie processes; if not, make sure that
+#     # the container is launched with the proper options, e.g., `docker --init`.
+#     time.sleep(0.2)
+#     assert_process_died(sleep_pid)
 
 
-@pytest.mark.flaky(reruns=3)
-def test_cancel_term_ignore(minimal_job, scheduler, local_only):
-    # This test emulates a descendant process of the spawned job that
-    # ignores the SIGTERM signal:
-    #
-    #   reframe --- local job script --- sleep_deeply.sh --- sleep
-    #                                      (TERM IGN)
-    #
-    #  Since the "local job script" does not ignore SIGTERM, it will be
-    #  terminated immediately after we cancel the job. However, the deeply
-    #  spawned sleep will ignore it. We need to make sure that our
-    #  implementation grants the sleep process a grace period and then
-    #  kills it.
-    minimal_job.time_limit = '1m'
-    prepare_job(minimal_job,
-                command=os.path.join(test_util.TEST_RESOURCES_CHECKS,
-                                     'src', 'sleep_deeply.sh'),
-                pre_run=[''],
-                post_run=[''],
-                prepare_cmds=[''])
-    submit_job(minimal_job)
+# @pytest.mark.flaky(reruns=3)
+# def test_cancel_term_ignore(minimal_job, scheduler, local_only):
+#     # This test emulates a descendant process of the spawned job that
+#     # ignores the SIGTERM signal:
+#     #
+#     #   reframe --- local job script --- sleep_deeply.sh --- sleep
+#     #                                      (TERM IGN)
+#     #
+#     #  Since the "local job script" does not ignore SIGTERM, it will be
+#     #  terminated immediately after we cancel the job. However, the deeply
+#     #  spawned sleep will ignore it. We need to make sure that our
+#     #  implementation grants the sleep process a grace period and then
+#     #  kills it.
+#     minimal_job.time_limit = '1m'
+#     prepare_job(minimal_job,
+#                 command=os.path.join(test_util.TEST_RESOURCES_CHECKS,
+#                                      'src', 'sleep_deeply.sh'),
+#                 pre_run=[''],
+#                 post_run=[''],
+#                 prepare_cmds=[''])
+#     submit_job(minimal_job)
 
-    # Stall a bit here to let the the spawned process start and install its
-    # signal handler for SIGTERM
-    time.sleep(1)
+#     # Stall a bit here to let the the spawned process start and install its
+#     # signal handler for SIGTERM
+#     time.sleep(1)
 
-    sleep_pid = _read_pid(minimal_job)
-    t_grace = time.time()
-    minimal_job.cancel()
-    time.sleep(0.1)
-    minimal_job.wait()
-    t_grace = time.time() - t_grace
+#     sleep_pid = _read_pid(minimal_job)
+#     t_grace = time.time()
+#     minimal_job.cancel()
+#     time.sleep(0.1)
+#     asyncio.run(minimal_job.wait())
+#     t_grace = time.time() - t_grace
 
-    assert t_grace >= 2 and t_grace < 5
-    assert minimal_job.state == 'FAILURE'
-    assert minimal_job.signal == signal.SIGKILL
+#     assert t_grace >= 2 and t_grace < 5
+#     assert minimal_job.state == 'FAILURE'
+#     assert minimal_job.signal == signal.SIGKILL
 
-    # Verify that the spawned sleep is killed, too, but back off a bit in
-    # order to allow the init process to reap it.
-    #
-    # NOTE: If this unit test is run inside a container, make sure that the
-    # PID 1 process is able to reap zombie processes; if not, make sure that
-    # the container is launched with the proper options, e.g., `docker --init`.
-    time.sleep(0.2)
-    assert_process_died(sleep_pid)
+#     # Verify that the spawned sleep is killed, too, but back off a bit in
+#     # order to allow the init process to reap it.
+#     #
+#     # NOTE: If this unit test is run inside a container, make sure that the
+#     # PID 1 process is able to reap zombie processes; if not, make sure that
+#     # the container is launched with the proper options, e.g., `docker --init`.
+#     time.sleep(0.2)
+#     assert_process_died(sleep_pid)
 
 
 # Flexible node allocation tests

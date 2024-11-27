@@ -253,6 +253,8 @@ def validate_storage_options(namespace, cmd_options):
 
 @logging.time_function_noexit
 def main():
+    # Setup the working dir
+    runtime.set_working_dir()
     # Setup command line options
     argparser = argparse.ArgumentParser()
     action_options = argparser.add_mutually_exclusive_group(required=True)

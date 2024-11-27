@@ -43,8 +43,6 @@ from reframe.core.exceptions import (BuildError, DependencyError,
 from reframe.core.meta import RegressionTestMeta
 from reframe.core.schedulers import Job
 
-WD_ORIGINAL = os.getcwd()
-
 
 class _NoRuntime(ContainerPlatform):
     '''Proxy container runtime for storing container platform info early
@@ -1019,7 +1017,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
             prefix = cls._rfm_custom_prefix
         except AttributeError:
             if osext.is_interactive():
-                prefix = WD_ORIGINAL
+                prefix = rt.get_working_dir()
             else:
                 try:
                     prefix = cls._rfm_pinned_prefix
@@ -1763,7 +1761,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
               more details.
 
         '''
-        os.chdir(WD_ORIGINAL)
+        os.chdir(rt.get_working_dir())
         self._current_partition = partition
         self._current_environ = environ
         self._setup_paths()
@@ -1883,7 +1881,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
         # override those set by the framework.
         resources_opts = self._map_resources_to_jobopts()
         self._build_job.options = resources_opts + self._build_job.options
-        with osext.change_dir(self._stagedir):
+        with osext.change_dir_global(self._stagedir):
             # Prepare build job
             build_commands = [
                 *self.prebuild_cmds,
@@ -1934,7 +1932,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
                 f'build job failed with exit code: {self._build_job.exitcode}'
             )
 
-        with osext.change_dir(self._stagedir):
+        with osext.change_dir_global(self._stagedir):
             self.build_system.post_build(self._build_job)
 
     @final
@@ -2032,7 +2030,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
         # override those set by the framework.
         resources_opts = self._map_resources_to_jobopts()
         self._job.options = resources_opts + self._job.options
-        with osext.change_dir(self._stagedir):
+        with osext.change_dir_global(self._stagedir):
             try:
                 self.logger.debug('Generating the run script')
                 self._job.prepare(
@@ -2199,7 +2197,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
         if self.is_dry_run():
             return
 
-        with osext.change_dir(self._stagedir):
+        with osext.change_dir_global(self._stagedir):
             success = sn.evaluate(self.sanity_patterns)
             if not success:
                 raise SanityError()
@@ -2256,7 +2254,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
                                                                         unit)
 
         # Evaluate the performance function and retrieve the metrics
-        with osext.change_dir(self._stagedir):
+        with osext.change_dir_global(self._stagedir):
             for tag, expr in self.perf_variables.items():
                 try:
                     value = expr.evaluate() if not self.is_dry_run() else None
@@ -2341,7 +2339,7 @@ class RegressionTest(RegressionMixin, jsonext.JSONSerializable):
         self._copy_job_files(self._job, self.outputdir)
         self._copy_job_files(self._build_job, self.outputdir)
 
-        with osext.change_dir(self.stagedir):
+        with osext.change_dir_global(self.stagedir):
             # Copy files specified by the user, but expand any glob patterns
             keep_files = itertools.chain(
                 *(glob.iglob(f) for f in self.keep_files)
@@ -2584,7 +2582,7 @@ class RunOnlyRegressionTest(RegressionTest, special=True):
         Similar to the :func:`RegressionTest.setup`, except that no build job
         is created for this test.
         '''
-        os.chdir(WD_ORIGINAL)
+        os.chdir(rt.get_working_dir())
         self._current_partition = partition
         self._current_environ = environ
         self._setup_paths()
@@ -2651,7 +2649,7 @@ class CompileOnlyRegressionTest(RegressionTest, special=True):
         Similar to the :func:`RegressionTest.setup`, except that no run job
         is created for this test.
         '''
-        os.chdir(WD_ORIGINAL)
+        os.chdir(rt.get_working_dir())
         # No need to setup the job for compile-only checks
         self._current_partition = partition
         self._current_environ = environ

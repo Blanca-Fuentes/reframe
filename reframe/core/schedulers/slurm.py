@@ -317,7 +317,7 @@ class SlurmJobScheduler(sched.JobScheduler):
         return None
 
     def _merge_files(self, job):
-        with osext.change_dir(job.workdir):
+        with osext.change_dir_global(job.workdir):
             out_glob = glob.glob(job.stdout + '_*')
             err_glob = glob.glob(job.stderr + '_*')
             self.log(f'merging job array output files: {", ".join(out_glob)}')
@@ -804,7 +804,7 @@ class _SlurmContext(sched.ReframeContext):
         self._access = sched_options
 
     async def submit_detect_job(self, job: _SlurmJob, node_features):
-        with osext.change_dir(job.workdir):
+        with osext.change_dir_global(job.workdir):
             job.prepare(job.content)
             try:
                 await job.submit()
@@ -854,7 +854,6 @@ class _SlurmContext(sched.ReframeContext):
         '''Set the node types in the system
 
         '''
-        # print(raw_node_types)
         default_nodes = []  # Initialize the list of node types in the default
         # Initialize the list of node types (with filtered features)
         node_types = []

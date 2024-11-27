@@ -8,6 +8,7 @@ import os
 import signal
 import socket
 import time
+import psutil
 
 import reframe.core.schedulers as sched
 import reframe.utility.osext as osext
@@ -104,9 +105,13 @@ class LocalJobScheduler(sched.JobScheduler):
     def _kill_all(self, job):
         '''Send SIGKILL to all the processes of the spawned job.'''
         try:
-            os.killpg(job.jobid, signal.SIGKILL)
+            p = psutil.Process(job.jobid)
+            children = p.children(recursive=True)
+            for child in children:
+                child.kill()
+            job.proc.kill()
             job._signal = signal.SIGKILL
-        except (ProcessLookupError, PermissionError):
+        except (ProcessLookupError, PermissionError, psutil.NoSuchProcess):
             # The process group may already be dead or assigned to a different
             # group, so ignore this error
             self.log(f'pid {job.jobid} already dead')
@@ -119,11 +124,17 @@ class LocalJobScheduler(sched.JobScheduler):
     def _term_all(self, job):
         '''Send SIGTERM to all the processes of the spawned job.'''
         try:
-            os.killpg(job.jobid, signal.SIGTERM)
+            p = psutil.Process(job.jobid)
+            children = p.children(recursive=True)
+            for child in children:
+                child.terminate()
+            job.proc.terminate()
             job._signal = signal.SIGTERM
-        except (ProcessLookupError, PermissionError):
+        except (ProcessLookupError, PermissionError, psutil.NoSuchProcess):
             # Job has finished already, close file handles
             self.log(f'pid {job.jobid} already dead')
+        finally:
+            # Close file handles
             job.f_stdout.close()
             job.f_stderr.close()
             job._state = 'FAILURE'
@@ -162,7 +173,6 @@ class LocalJobScheduler(sched.JobScheduler):
         '''
         if job.exception:
             raise job.exception
-        # print(job.state)
         return job.state in ['SUCCESS', 'FAILURE', 'TIMEOUT']
 
     async def poll(self, *jobs):
@@ -172,7 +182,6 @@ class LocalJobScheduler(sched.JobScheduler):
     async def _poll_job(self, job):
         if job is None or job.jobid is None:
             return
-        # print(job.jobid, job.proc.returncode)
         if job.proc.returncode is None:
             # Job has not finished; check if we have reached a timeout
             t_elapsed = time.time() - job.submit_time
@@ -200,12 +209,14 @@ class LocalJobScheduler(sched.JobScheduler):
         self._kill_all(job)
 
         # Retrieve the status of the job and return
-        if os.WIFEXITED(job.proc.returncode):
-            job._exitcode = os.WEXITSTATUS(job.proc.returncode)
+        if job.proc.returncode >= 0:
+            job._exitcode = job.proc.returncode
             job._state = 'FAILURE' if job.exitcode != 0 else 'SUCCESS'
-        elif os.WIFSIGNALED(job.proc.returncode):
+        else:
             job._state = 'FAILURE'
-            job._signal = os.WTERMSIG(job.proc.returncode)
+            job._signal = job.proc.returncode
+
+        # if job._state == 'FAILURE':
 
     @classmethod
     def validate(cls) -> str:

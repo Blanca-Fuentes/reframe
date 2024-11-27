@@ -30,8 +30,6 @@ from reframe.core.backends import (detect_modules_system, detect_launcher,
 from reframe.core.logging import getlogger
 from reframe.utility import ScopedDict
 
-WD_ORIGINAL = os.getcwd()
-
 
 def _match_option(opt, opt_map):
     if isinstance(opt, list):
@@ -339,7 +337,6 @@ class _SiteConfig:
         return self._local_system
 
     def load_config_python(self, filename, validate=True):
-        os.chdir(WD_ORIGINAL)
         try:
             mod = util.import_module_from_file(filename)
         except ImportError as e:

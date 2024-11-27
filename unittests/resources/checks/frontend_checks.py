@@ -7,6 +7,7 @@
 # Special checks for testing the front-end
 #
 
+import asyncio
 import os
 import signal
 import sys
@@ -107,18 +108,18 @@ class KeyboardInterruptCheck(BaseFrontendCheck, special=True):
         if self.phase == 'setup':
             raise KeyboardInterrupt
 
-    def run_wait(self):
+    async def run_wait(self):
         # We do our nasty stuff in wait() to make things more complicated
         if self.phase == 'wait':
             raise KeyboardInterrupt
         else:
-            return super().run_wait()
+            return await super().run_wait()
 
 
 class SystemExitCheck(BaseFrontendCheck, special=True):
     '''Simulate system exit from within a check.'''
 
-    def run_wait(self):
+    async def run_wait(self):
         # We do our nasty stuff in wait() to make things more complicated
         sys.exit(1)
 
@@ -190,9 +191,9 @@ class SelfKillCheck(rfm.RunOnlyRegressionTest, special=True):
     executable = 'echo'
     sanity_patterns = sn.assert_true(1)
 
-    def run(self):
-        super().run()
-        time.sleep(0.5)
+    async def run(self):
+        await super().run()
+        await asyncio.sleep(0.5)
         os.kill(os.getpid(), signal.SIGTERM)
 
 

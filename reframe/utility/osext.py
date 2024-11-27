@@ -29,8 +29,6 @@ from reframe.core.exceptions import (ReframeError, SpawnedProcessError,
                                      SpawnedProcessTimeout)
 from . import OrderedSet
 
-WD_save = os.getcwd()
-
 
 class UnstartedProcError(ReframeError):
     '''Raised when a process operation is attempted on a
@@ -360,38 +358,16 @@ async def run_command_asyncio_alone(cmd,
 
     if shell:
         # Call create_subprocess_shell
-        proc = await asyncio.create_subprocess_shell(
+        return await asyncio.create_subprocess_shell(
             cmd, stdout=stdout,
             stderr=stderr
         )
     else:
         # Call create_subprocess_exec
-        await asyncio.create_subprocess_exec(
+        return await asyncio.create_subprocess_exec(
             cmd, stdout=stdout,
             stderr=stderr
         )
-
-    await proc.wait()
-    return proc
-
-    # if serial:
-    #     try:
-    #         proc_stdout, proc_stderr = await asyncio.wait_for(
-    #             proc.communicate(), timeout=timeout
-    #         )
-    #     except asyncio.TimeoutError as e:
-    #         os.killpg(proc.pid, signal.SIGKILL)
-    #         raise SpawnedProcessTimeout(e.cmd,
-    #                                     proc.stdout.read(),
-    #                                     proc.stderr.read(), timeout) from None
-
-    #     completed = subprocess.CompletedProcess(cmd,
-    #                                             returncode=proc.returncode,
-    #                                             stdout=proc_stdout.decode(),
-    #                                             stderr=proc_stderr.decode())
-    #     return completed
-    # else:
-    #     return proc
 
 
 async def run_command_asyncio(cmd,
@@ -747,7 +723,31 @@ class change_dir:
     '''
 
     def __init__(self, dir_name):
-        self._wd_save = WD_save
+        self._wd_save = os.getcwd()
+        self._dir_name = dir_name
+
+    def __enter__(self):
+        os.chdir(self._dir_name)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self._wd_save)
+
+    async def __aenter__(self):
+        os.chdir(self._dir_name)
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self._wd_save)
+
+
+class change_dir_global:
+    '''Context manager to temporarily change the current working directory.
+
+    :arg dir_name: The directory to temporarily change to.
+    '''
+
+    def __init__(self, dir_name):
+        from reframe.core.runtime import get_working_dir
+        self._wd_save = get_working_dir()
         self._dir_name = dir_name
 
     def __enter__(self):
