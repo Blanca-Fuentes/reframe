@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import asyncio
 import os
 import pytest
 import re
@@ -145,7 +144,7 @@ def prepare_job(job, command='hostname',
 
 def submit_job(job):
     with rt.module_use(test_util.TEST_MODULES):
-        asyncio.run(job.submit())
+        test_util.asyncio_run(job.submit)
 
 
 def submit_job_local(job):
@@ -153,7 +152,7 @@ def submit_job_local(job):
         await job.submit()
         await job.wait()
     with rt.module_use(test_util.TEST_MODULES):
-        asyncio.run(submit_wait_local())
+        test_util.asyncio_run(submit_wait_local)
 
 
 def assert_job_script_sanity(job):
@@ -492,7 +491,7 @@ def test_submit(make_job, exec_ctx):
     else:
         submit_job(minimal_job)
         assert minimal_job.jobid != []
-        asyncio.run(minimal_job.wait())
+        test_util.asyncio_run(minimal_job.wait)
 
     if sched_name == 'local':
         assert [socket.gethostname()] == minimal_job.nodelist
@@ -523,7 +522,7 @@ def test_submit_timelimit(minimal_job, local_only):
         submit_job(minimal_job)
         assert minimal_job.jobid is not None
         with pytest.raises(JobError):
-            asyncio.run(minimal_job.wait())
+            test_util.asyncio_run(minimal_job.wait)
 
     t_job = time.time() - t_job
     assert t_job >= 2
@@ -560,7 +559,7 @@ def test_submit_job_array(make_job, slurm_only, exec_ctx):
         submit_job_local(minimal_job)
     else:
         submit_job(job)
-        asyncio.run(job.wait())
+        test_util.asyncio_run(job.wait)
     if job.scheduler.registered_name == 'slurm':
         assert job.exitcode == 0
     with open(job.stdout) as fp:
@@ -585,7 +584,7 @@ def test_cancel(make_job, exec_ctx):
     # want to test here.
     time.sleep(0.01)
 
-    asyncio.run(minimal_job.wait())
+    test_util.asyncio_run(minimal_job.wait)
     t_job = time.time() - t_job
     assert minimal_job.finished()
     assert t_job < 30
@@ -607,7 +606,7 @@ def test_cancel_before_submit(minimal_job):
 def test_wait_before_submit(minimal_job):
     prepare_job(minimal_job, 'sleep 3')
     with pytest.raises(JobNotStartedError):
-        asyncio.run(minimal_job.wait())
+        test_util.asyncio_run(minimal_job.wait)
 
 
 def test_finished(make_job, exec_ctx):
@@ -617,7 +616,7 @@ def test_finished(make_job, exec_ctx):
     if sched_name != 'local':
         submit_job(minimal_job)
         assert not minimal_job.finished()
-        asyncio.run(minimal_job.wait())
+        test_util.asyncio_run(minimal_job.wait)
 
 
 def test_finished_before_submit(minimal_job):
@@ -634,7 +633,7 @@ def test_finished_raises_error(make_job, exec_ctx):
         submit_job_local(minimal_job)
     else:
         submit_job(minimal_job)
-        asyncio.run(minimal_job.wait())
+        test_util.asyncio_run(minimal_job.wait)
 
     # Emulate an error during polling and verify that it is raised correctly
     # when finished() is called
@@ -760,7 +759,7 @@ def test_submit_max_pending_time(make_job, exec_ctx, scheduler):
     submit_job(minimal_job)
     with pytest.raises(JobError,
                        match='maximum pending time exceeded'):
-        asyncio.run(minimal_job.wait())
+        test_util.asyncio_run(minimal_job.wait)
 
 
 def assert_process_died(pid):
@@ -820,7 +819,7 @@ def _read_pid(job, attempts=3):
 #     t_grace = time.time()
 #     minimal_job.cancel()
 #     time.sleep(2)
-#     asyncio.run(minimal_job.wait())
+#     test_util.asyncio_runminimal_job.wait())
 #     t_grace = time.time() - t_grace
 
 #     assert t_grace >= 2 and t_grace < 5
@@ -867,7 +866,7 @@ def _read_pid(job, attempts=3):
 #     t_grace = time.time()
 #     minimal_job.cancel()
 #     time.sleep(0.1)
-#     asyncio.run(minimal_job.wait())
+#     test_util.asyncio_runminimal_job.wait())
 #     t_grace = time.time() - t_grace
 
 #     assert t_grace >= 2 and t_grace < 5

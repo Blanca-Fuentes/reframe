@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import asyncio
 import os
 import pytest
 import re
@@ -27,7 +26,7 @@ rt.set_working_dir()
 
 
 def _run(test, partition, prgenv):
-    asyncio.run(_runasync(test, partition, prgenv))
+    test_util.asyncio_run(_runasync, test, partition, prgenv)
 
 
 async def _runasync(test, partition, prgenv):
@@ -322,7 +321,7 @@ def test_compile_only_failure(local_exec_ctx):
     test = MyTest()
     test.setup(*local_exec_ctx)
     with pytest.raises(BuildError):
-        asyncio.run(compile_wait(test))
+        test_util.asyncio_run(compile_wait, test)
 
 
 def test_compile_only_warning(local_exec_ctx):
@@ -807,7 +806,7 @@ def test_sourcepath_abs(local_exec_ctx):
     test.setup(*local_exec_ctx)
     test.sourcepath = '/usr/src'
     with pytest.raises(PipelineError):
-        asyncio.run(test.compile())
+        test_util.asyncio_run(test.compile)
 
 
 def test_sourcepath_upref(local_exec_ctx):
@@ -820,7 +819,7 @@ def test_sourcepath_upref(local_exec_ctx):
     test.setup(*local_exec_ctx)
     test.sourcepath = '../hellosrc'
     with pytest.raises(PipelineError):
-        asyncio.run(test.compile())
+        test_util.asyncio_run(test.compile)
 
 
 def test_sourcepath_non_existent(local_exec_ctx):
@@ -833,7 +832,7 @@ def test_sourcepath_non_existent(local_exec_ctx):
     test.setup(*local_exec_ctx)
     test.sourcepath = 'non_existent.c'
     with pytest.raises(BuildError):
-        asyncio.run(compile_wait(test))
+        test_util.asyncio_run(compile_wait, test)
 
 
 def test_extra_resources(HelloTest, testsys_exec_ctx):

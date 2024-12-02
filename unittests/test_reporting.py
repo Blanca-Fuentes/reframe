@@ -27,8 +27,11 @@ from reframe.frontend.reporting import RunReport
 
 _DEFAULT_BASE_COLS = DEFAULT_GROUP_BY + DEFAULT_EXTRA_COLS
 
+rt.set_working_dir()
 
 # NOTE: We could move this to utility
+
+
 class _timer:
     '''Context manager for timing'''
 

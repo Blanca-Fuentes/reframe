@@ -4,6 +4,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import asyncio
+from asyncio import (get_child_watcher,
+                     set_child_watcher,
+                     SafeChildWatcher)
 import contextlib
 import math
 import sys
@@ -100,7 +103,7 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
         self._retired_tasks = []
         self.task_listeners.append(self)
 
-    def _runcase(self, case):
+    async def _runcase(self, case):
         super()._runcase(case)
         check, partition, _ = case
         task = RegressionTask(case, self.task_listeners)
@@ -133,46 +136,25 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
                        sched_flex_alloc_nodes=self.sched_flex_alloc_nodes,
                        sched_options=self.sched_options)
 
-            async def compile_async_serial():
-                await task.compile()
-                await task.compile_wait()
+            await task.compile()
+            await task.compile_wait()
+            await task.run()
 
-            async def run_async_serial():
-                await task.run()
-
+            if task.check.local:
                 sched = self.local_scheduler
-
-                self._pollctl.reset_snooze_time()
-                while True:
-                    if not self.dry_run_mode:
-                        await sched.poll(task.check.job)
-                    if task.run_complete():
-                        break
-
-                    await self._pollctl.snooze()
-
-                await task.run_wait()
-
-            if task.check.is_local:
-                # TODO: ssh scheduler
-                asyncio.run(compile_async_serial())
-                asyncio.run(run_async_serial())
             else:
-                asyncio.run(compile_async_serial())
-                asyncio.run(task.run())
-
                 sched = partition.scheduler
 
-                self._pollctl.reset_snooze_time()
-                while True:
-                    if not self.dry_run_mode:
-                        asyncio.run(sched.poll(task.check.job))
-                    if task.run_complete():
-                        break
+            self._pollctl.reset_snooze_time()
+            while True:
+                if not self.dry_run_mode:
+                    await sched.poll(task.check.job)
+                if task.run_complete():
+                    break
 
-                    asyncio.run(self._pollctl.snooze())
+                await self._pollctl.snooze()
 
-                asyncio.run(task.run_wait())
+            await task.run_wait()
 
             if not self.skip_sanity_check:
                 task.sanity()
@@ -268,6 +250,44 @@ class SerialExecutionPolicy(ExecutionPolicy, TaskEventListener):
         if self.timeout_expired():
             raise RunSessionTimeout('maximum session duration exceeded')
 
+    def execute(self, testcases):
+        '''Execute the policy for a given set of testcases.'''
+        # Moved here the execution
+        try:
+            loop = asyncio.get_event_loop()
+            for task in all_tasks(loop):
+                if isinstance(task, asyncio.tasks.Task):
+                    task.cancel()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                watcher = asyncio.get_child_watcher()
+                if isinstance(watcher, asyncio.SafeChildWatcher):
+                    # Detach the watcher from the current loop to avoid issues
+                    watcher.close()
+                    watcher.attach_loop(None)
+                asyncio.set_event_loop(loop)
+                if isinstance(watcher, asyncio.SafeChildWatcher):
+                    # Reattach the watcher to the new loop
+                    watcher.attach_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        for case in testcases:
+            try:
+                loop.run_until_complete(self._runcase(case))
+            except (Exception, KeyboardInterrupt) as e:
+                if type(e) in (ABORT_REASONS):
+                    for task in all_tasks(loop):
+                        if isinstance(task, asyncio.tasks.Task):
+                            task.cancel()
+                    loop.close()
+                    raise e
+                else:
+                    getlogger().info(f"Execution stopped due to an error: {e}")
+                    break
+        loop.close()
+        self.exit()
+
     def _exit(self):
         # Clean up all remaining tasks
         _cleanup_all(self._retired_tasks, not self.keep_stage_files)
@@ -298,13 +318,17 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
         self.task_listeners.append(self)
 
     async def _runcase(self, case, task):
-        # I added the task here as an argument because, I wanted to initialize it
-        # outside, when I gather the tasks. If I gather the tasks and then I do asyncio
-        # manage them, if one of them fails the others are not iformed, I had to code that
-        # manually. There is a way to make everything stop if an exepction is raised but
-        # I didn't know how to treat that raise Exception nicelly because I wouldn't be able
-        # to abort the tasks which the execution has not yet started, I needed to do abortall
-        # on all the tests, not only the ones which were initiated by the execution. Exit gracefully
+        # I added the task here as an argument because,
+        # I wanted to initialize it
+        # outside, when I gather the tasks.
+        # If I gather the tasks and then I do asyncio
+        # manage them, if one of them fails the others are not iformed,
+        # I had to code that manually. There is a way to make everything
+        # stop if an exepction is raised but I didn't know how to treat
+        # that raise Exception nicelly because I wouldn't be able
+        # to abort the tasks which the execution has not yet started,
+        # I needed to do abortall on all the tests, not only the ones
+        # which were initiated by the execution. Exit gracefully
         # the execuion loop aborting all the tasks
         super()._runcase(case)
         check, partition, _ = case
@@ -366,9 +390,11 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
             await task.compile()
             self._partition_tasks[partname].add(task)
             await task.compile_wait()
+            self._partition_tasks[partname].remove(task)
             while len(self._partition_tasks[partname]) > max_jobs:
                 await asyncio.sleep(2)
             await task.run()
+            self._partition_tasks[partname].add(task)
 
             # Pick the right scheduler
             if task.check.local:
@@ -387,6 +413,7 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
                 await self._pollctl.snooze()
 
             await task.run_wait()
+            self._partition_tasks[partname].remove(task)
             if not self.skip_sanity_check:
                 task.sanity()
 
@@ -430,18 +457,6 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
                 if partname:
                     self._partition_tasks[partname].remove(task)
             return
-
-        self._current_tasks.remove(task)
-        if task.check.current_partition:
-            partname = task.check.current_partition.fullname
-        else:
-            partname = None
-
-        # Remove tasks from the partition tasks if there
-        with contextlib.suppress(KeyError):
-            self._partition_tasks['_rfm_local'].remove(task)
-            if partname:
-                self._partition_tasks[partname].remove(task)
 
     async def check_deps(self, task):
         while not (self.deps_skipped(task) or self.deps_failed(task) or
@@ -578,11 +593,12 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
             loop.run_until_complete(self._execute_until_failure(all_cases))
         except (Exception, KeyboardInterrupt) as e:
             if type(e) in (ABORT_REASONS):
-                loop.run_until_complete(self._cancel_gracefully(all_cases))
+                loop.run_until_complete(_cancel_gracefully(all_cases))
                 try:
                     raise AbortTaskError
                 except AbortTaskError as exc:
                     self._abortall(exc)
+                loop.close()
                 raise e
             else:
                 getlogger().info(f"Execution stopped due to an error: {e}")
@@ -601,7 +617,18 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
                 if task.exception():
                     raise task.exception()  # Exit if aborted
 
-    async def _cancel_gracefully(self, all_cases):
-        for case in all_cases:
-            case.cancel()
-        await asyncio.gather(*all_cases, return_exceptions=True)
+
+async def _cancel_gracefully(all_cases):
+    for case in all_cases:
+        case.cancel()
+    await asyncio.gather(*all_cases, return_exceptions=True)
+
+
+def all_tasks(loop):
+    """Wrapper for asyncio.current_task() compatible with Python 3.6 and later."""
+    if sys.version_info >= (3, 7):
+        # Use asyncio.current_task() directly in Python 3.7+
+        return asyncio.all_tasks(loop)
+    else:
+        # Fallback to asyncio.tasks.current_task() in Python 3.6
+        return asyncio.Task.all_tasks(loop)
