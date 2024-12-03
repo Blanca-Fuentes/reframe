@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import asyncio
 import contextlib
 import os
 import pytest
@@ -477,8 +476,6 @@ def _read_timestamps(tasks):
     end_stamps.sort()
     return begin_stamps, end_stamps
 
-# This test is not valid in the asyncio policy
-
 
 def test_concurrency_unlimited(make_async_runner, make_cases,
                                make_sleep_check, make_exec_ctx):
@@ -506,8 +503,6 @@ def test_concurrency_unlimited(make_async_runner, make_cases,
     #
     if begin_stamps[-1] > end_stamps[0]:
         pytest.skip('the system seems too much loaded.')
-
-# This test is not valid in the asyncio policy
 
 
 def test_concurrency_limited(make_async_runner, make_cases,
@@ -658,71 +653,71 @@ def test_kbd_interrupt_in_setup_with_limited_concurrency(
     assert_interrupted_run(runner)
 
 
-# def test_run_complete_fails_main_loop(make_async_runner, make_cases,
-#                                       make_sleep_check, make_exec_ctx):
-#     make_exec_ctx(options=max_jobs_opts(1))
-#     runner, _ = make_async_runner()
-#     num_checks = 3
-#     runner.runall(make_cases([make_sleep_check(10, poll_fail='early'),
-#                               make_sleep_check(0.1),
-#                               make_sleep_check(10, poll_fail='early')]))
-#     assert_runall(runner)
-#     stats = runner.stats
-#     assert stats.num_cases() == num_checks
-#     assert len(stats.failed()) == 2
+def test_run_complete_fails_main_loop(make_async_runner, make_cases,
+                                      make_sleep_check, make_exec_ctx):
+    make_exec_ctx(options=max_jobs_opts(1))
+    runner, _ = make_async_runner()
+    num_checks = 3
+    runner.runall(make_cases([make_sleep_check(10, poll_fail='early'),
+                              make_sleep_check(0.1),
+                              make_sleep_check(10, poll_fail='early')]))
+    assert_runall(runner)
+    stats = runner.stats
+    assert stats.num_cases() == num_checks
+    assert len(stats.failed()) == 2
 
-#     # Verify that the succeeded test is a SleepCheck
-#     for t in stats.tasks():
-#         if not t.failed:
-#             assert t.check.name.startswith('SleepCheck')
-
-
-# def test_run_complete_fails_busy_loop(make_async_runner, make_cases,
-#                                       make_sleep_check, make_exec_ctx):
-#     make_exec_ctx(options=max_jobs_opts(1))
-#     runner, _ = make_async_runner()
-#     num_checks = 3
-#     runner.runall(make_cases([make_sleep_check(1, poll_fail='late'),
-#                               make_sleep_check(0.1),
-#                               make_sleep_check(0.5, poll_fail='late')]))
-#     assert_runall(runner)
-#     stats = runner.stats
-#     assert stats.num_cases() == num_checks
-#     assert len(stats.failed()) == 2
-
-#     # Verify that the succeeded test is a SleepCheck
-#     for t in stats.tasks():
-#         if not t.failed:
-#             assert t.check.name.startswith('SleepCheck')
+    # Verify that the succeeded test is a SleepCheck
+    for t in stats.tasks():
+        if not t.failed:
+            assert t.check.name.startswith('SleepCheck')
 
 
-# def test_compile_fail_reschedule_main_loop(make_async_runner, make_cases,
-#                                            make_sleep_check, make_exec_ctx):
-#     make_exec_ctx(options=max_jobs_opts(1))
-#     runner, _ = make_async_runner()
-#     num_checks = 2
-#     runner.runall(make_cases([make_sleep_check(.1, poll_fail='early'),
-#                               CompileFailureCheck()]))
+def test_run_complete_fails_busy_loop(make_async_runner, make_cases,
+                                      make_sleep_check, make_exec_ctx):
+    make_exec_ctx(options=max_jobs_opts(1))
+    runner, _ = make_async_runner()
+    num_checks = 3
+    runner.runall(make_cases([make_sleep_check(1, poll_fail='late'),
+                              make_sleep_check(0.1),
+                              make_sleep_check(0.5, poll_fail='late')]))
+    assert_runall(runner)
+    stats = runner.stats
+    assert stats.num_cases() == num_checks
+    assert len(stats.failed()) == 2
 
-#     stats = runner.stats
-#     assert num_checks == stats.num_cases()
-#     assert_runall(runner)
-#     assert num_checks == len(stats.failed())
+    # Verify that the succeeded test is a SleepCheck
+    for t in stats.tasks():
+        if not t.failed:
+            assert t.check.name.startswith('SleepCheck')
 
 
-# def test_compile_fail_reschedule_busy_loop(make_async_runner, make_cases,
-#                                            make_sleep_check, make_exec_ctx):
-#     make_exec_ctx(options=max_jobs_opts(1))
-#     runner, _ = make_async_runner()
-#     num_checks = 2
-#     runner.runall(
-#         make_cases([make_sleep_check(1.5, poll_fail='late'),
-#                     CompileFailureCheck()])
-#     )
-#     stats = runner.stats
-#     assert num_checks == stats.num_cases()
-#     assert_runall(runner)
-#     assert num_checks == len(stats.failed())
+def test_compile_fail_reschedule_main_loop(make_async_runner, make_cases,
+                                           make_sleep_check, make_exec_ctx):
+    make_exec_ctx(options=max_jobs_opts(1))
+    runner, _ = make_async_runner()
+    num_checks = 2
+    runner.runall(make_cases([make_sleep_check(.1, poll_fail='early'),
+                              CompileFailureCheck()]))
+
+    stats = runner.stats
+    assert num_checks == stats.num_cases()
+    assert_runall(runner)
+    assert num_checks == len(stats.failed())
+
+
+def test_compile_fail_reschedule_busy_loop(make_async_runner, make_cases,
+                                           make_sleep_check, make_exec_ctx):
+    make_exec_ctx(options=max_jobs_opts(1))
+    runner, _ = make_async_runner()
+    num_checks = 2
+    runner.runall(
+        make_cases([make_sleep_check(1.5, poll_fail='late'),
+                    CompileFailureCheck()])
+    )
+    stats = runner.stats
+    assert num_checks == stats.num_cases()
+    assert_runall(runner)
+    assert num_checks == len(stats.failed())
 
 
 def test_config_params(make_runner, make_exec_ctx):
