@@ -4,9 +4,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import asyncio
-from asyncio import (get_child_watcher,
-                     set_child_watcher,
-                     SafeChildWatcher)
 import contextlib
 import math
 import sys
@@ -22,8 +19,6 @@ from reframe.core.exceptions import (FailureLimitError,
                                      ForceExitError,
                                      AbortTaskError)
 from reframe.core.logging import getlogger, level_from_str
-from reframe.core.pipeline import (CompileOnlyRegressionTest,
-                                   RunOnlyRegressionTest)
 from reframe.frontend.executors import (ExecutionPolicy, RegressionTask,
                                         TaskEventListener, ABORT_REASONS)
 
@@ -385,16 +380,16 @@ class AsyncioExecutionPolicy(ExecutionPolicy, TaskEventListener):
                        sched_options=self.sched_options)
             partname = _get_partition_name(task, phase='build')
             max_jobs = self._max_jobs[partname]
-            while len(self._partition_tasks[partname]) > max_jobs:
+            while len(self._partition_tasks[partname])+1 > max_jobs:
                 await asyncio.sleep(2)
-            await task.compile()
             self._partition_tasks[partname].add(task)
+            await task.compile()
             await task.compile_wait()
             self._partition_tasks[partname].remove(task)
-            while len(self._partition_tasks[partname]) > max_jobs:
+            while len(self._partition_tasks[partname])+1 > max_jobs:
                 await asyncio.sleep(2)
-            await task.run()
             self._partition_tasks[partname].add(task)
+            await task.run()
 
             # Pick the right scheduler
             if task.check.local:
